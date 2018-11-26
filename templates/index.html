@@ -1,0 +1,17 @@
+{% extends "layout.html" %}
+{% block body %}
+<div id="mainblock">
+    <h1>Welcome to distributed chat!</h1>
+
+    <form action="" method="post">
+        <h2>Connection node</h2>
+        <h3>Please, provide information about a node from chat</h3>
+        <input type="text" placeholder="127.0.0.1" name="ip" value="{{
+          request.form.username }}">
+        <input type="text" placeholder="5000" name="port" value="{{
+          request.form.username }}">
+        <input class="btn btn-default" type="submit" value="Chat">
+    </form>
+
+</div>
+{% endblock %}
