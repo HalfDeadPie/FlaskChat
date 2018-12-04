@@ -2,10 +2,20 @@
 {% block body %}
 <div id="mainblock">
     <h1>Welcome to distributed chat!</h1>
+    <h2>Friend's address: {{ friend }}</h2>
+    <label>{{ test }}</label>
+    <h2>Messages</h2>
+    <hr>
+    {% for message in messagelist %}
+        <label for="id_{{message}}">{{message}}</label>
+        <hr>
+    {% endfor %}
 
+    <h2>New message</h2>
     <form action="" method="post">
-        <input type="text" placeholder="Your message" name="message" value="{{
-          request.form.username }}">
+        <textarea rows="2" cols="50" placeholder="Your message" name="message"
+                  value="{{ request.form.message }}"></textarea>
+        <input type="hidden" value="IN_REGULAR_MESSAGE" name="message_type" />
         <input type="submit" value="Chat">
     </form>
 
