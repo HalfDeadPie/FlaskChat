@@ -1,8 +1,13 @@
 import json
+import sys
 
 import flask
-from click._unicodefun import click
 import CONSTANTS as CONST
+import threading
+import time
+import logging
+
+from click._unicodefun import click
 from flask import Flask, request
 from connector import Connector
 from node import Node
@@ -12,10 +17,24 @@ my_ip = None
 my_port = None
 my_friend = {}
 my_state = CONST.STATE_FOLLOWER
-my_messages = [ ]
+my_messages = []
 my_leader = {}
 
+
+LEVELS = { 'debug':logging.DEBUG,
+            'info':logging.INFO,
+            'warning':logging.WARNING,
+            'error':logging.ERROR,
+            'critical':logging.CRITICAL,
+            }
+
+if len(sys.argv) > 1:
+    level_name = sys.argv[1]
+    level = LEVELS.get(level_name, logging.NOTSET)
+    logging.basicConfig(level=level)
+
 # ----------------------------------------------------------------------------------------------------------------------
+
 def isMine(ip):
     return ip == my_ip
 
@@ -115,10 +134,20 @@ def index():
     elif method == 'POST':
         return processPost()
 
-@click.command()
-@click.argument('ip')
-@click.argument('port')
-def runner(ip, port):
+# ----------------------------------------------------------------------------------------------------------------------
+
+def start_election():
+    my_leader = { CONST.STATE_LEADER: 'lol'}
+
+def heartbeat():
+    logging.debug('heartbeat')
+
+def leader_checker():
+    while True:
+        if not my_leader:
+            start_election()
+
+def main_handler(ip, port):
     global my_ip
     my_ip = ip
 
@@ -132,6 +161,21 @@ def runner(ip, port):
     my_leader = {CONST.STATE_LEADER : None}
 
     app.run(host=ip, port=port)
+
+@click.command()
+@click.argument('ip')
+@click.argument('port')
+def runner(ip, port):
+    m = threading.Thread(name='main_handler', target=main_handler, args=(ip, port))
+    h = threading.Thread(name='heartbeat', target=heartbeat)
+    s = threading.Thread(name='leader_checker', target=leader_checker)
+
+    h.setDaemon(True)
+    s.setDaemon(True)
+
+    m.start()
+    h.start()
+    s.start()
 
 if __name__ == '__main__':
     runner(obj={})
