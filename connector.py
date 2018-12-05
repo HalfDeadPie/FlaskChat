@@ -1,16 +1,30 @@
+import logging
+import sys
 import requests
 import CONSTANTS as CONST
 import json
 
+# logging configuration
+LEVELS = { 'debug':logging.DEBUG,
+            'info':logging.INFO,
+            'warning':logging.WARNING,
+            'error':logging.ERROR,
+            'critical':logging.CRITICAL,
+            }
+
+if len(sys.argv) > 1:
+    level_name = sys.argv[1]
+    level = LEVELS.get(level_name, logging.NOTSET)
+    logging.basicConfig(level=level)
 
 class Connector:
 
     @staticmethod
-    def buildURL(ip, port):
+    def build_url(ip, port):
         return 'http://' + ip + ':' + port + '/'
 
     @staticmethod
-    def buildHeaders(message_type, srcip, srcport):
+    def build_header(message_type, srcip, srcport):
         headers = {
             'message_type': message_type,
             'ip': srcip,
@@ -19,11 +33,11 @@ class Connector:
         return headers
 
     @staticmethod
-    def buildLeaderData(leader):
-        return json.dumps(leader)
+    def build_node_data(node):
+        return json.dumps(node)
 
     @staticmethod
-    def buildRegularMessage(text, time):
+    def build_regular_message(text, time):
         message = {}
         message[CONST.MESSAGE_TEXT] = text
         message[CONST.MESSAGE_TIME] = time
@@ -31,30 +45,38 @@ class Connector:
 
     @staticmethod
     def connect(srcip, srcport, dstip, dstport):
-        headers = Connector.buildHeaders(CONST.TYPE_CONNECT, srcip, srcport)
-        url = Connector.buildURL(dstip, dstport)
+        headers = Connector.build_header(CONST.TYPE_CONNECT, srcip, srcport)
+        url = Connector.build_url(dstip, dstport)
         result = requests.post(url, headers=headers, data='hello')
-        print('Connecting [{}]' .format(result.status_code))
+        print('Connecting...code ', str(result.status_code))
         return result.status_code
 
     @staticmethod
-    def sendLeader(srcip, srcport, dstip, dstport, leader):
+    def send_leader(srcip, srcport, dstip, dstport, leader):
         if leader:
-            headers = Connector.buildHeaders(CONST.TYPE_LEADER_INFO, srcip, srcport)
-            url = Connector.buildURL(dstip, dstport)
-            leader_data = Connector.buildLeaderData(leader)
+            headers = Connector.build_header(CONST.TYPE_LEADER_INFO, srcip, srcport)
+            url = Connector.build_url(dstip, dstport)
+            leader_data = Connector.build_node_data(leader)
             result = requests.post(url, headers=headers, json=leader_data)
-            print('Sending leader information [{}]' .format(result.status_code))
+            logging.debug('Sending leader information...code %s', str(result.status_code))
         else:
-            headers = Connector.buildHeaders(CONST.TYPE_MISSING_LEADER, srcip, srcport)
-            url = Connector.buildURL(dstip, dstport)
+            headers = Connector.build_header(CONST.TYPE_MISSING_LEADER, srcip, srcport)
+            url = Connector.build_url(dstip, dstport)
             result = requests.post(url, headers=headers)
-            print('Sending missing leader information [{}]' .format(result.status_code))
+            logging.debug('Sending missing leader information...code %s', str(result.status_code))
 
     @staticmethod
-    def sendMessage(srcip, srcport, dstip, dstport, text, time):
-        headers = Connector.buildHeaders(CONST.TYPE_MESSAGE, srcip, srcport)
-        url = Connector.buildURL(dstip, dstport)
-        message_data = Connector.buildRegularMessage(text, time)
+    def send_message(srcip, srcport, dstip, dstport, text, time):
+        headers = Connector.build_header(CONST.TYPE_MESSAGE, srcip, srcport)
+        url = Connector.build_url(dstip, dstport)
+        message_data = Connector.build_regular_message(text, time)
         result = requests.post(url, headers=headers, json=message_data)
-        print('Sending message [{}]' .format(result.status_code))
+        logging.debug('Sending message...code ', str(result.status_code))
+
+    @staticmethod
+    def send_candidate_info(srcip, srcport, dstip, dstport, info):
+        headers = Connector.build_header(CONST.TYPE_CANDIDATE, srcip, srcport)
+        url = Connector.build_url(dstip, dstport)
+        candidate_data = Connector.build_node_data(info)
+        result = requests.post(url, headers=headers, json=candidate_data)
+        print('Sending candidate...code ', str(result.status_code))
