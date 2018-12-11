@@ -61,3 +61,12 @@ a{
 #food_block{
     margin-top: 10px;
 }
+
+#mainblock{
+    border: 1px solid black;
+    margin: 10px;
+}
+
+#chatcontainer{
+    margin: 10px;
+}

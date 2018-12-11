@@ -19,7 +19,7 @@ def decode_id(id):
 def format_regular_message(message):
     return '[' + str(message[CONST.MESSAGE_TIME]) + ']: ' + str(message[CONST.MESSAGE_TEXT])
 
-def build_node(name, ip, port):
+def build_node_dict(name, ip, port):
     return {name: encode_id(ip, port)}
 
 def calc_value(id):

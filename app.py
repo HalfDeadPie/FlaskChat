@@ -1,141 +1,226 @@
 import json
 import sys
+import time
+
 import flask
-import CONSTANTS as CONST
+import CONSTANTS as C
 import threading
-import logging
+import logging as L
 
 from click._unicodefun import click
 from flask import Flask, request
+
 from connector import Connector
-from support import  encode_id, decode_id, \
-    format_regular_message, build_node, calc_value
+from support import encode_id, decode_id, \
+    format_regular_message, build_node_dict, calc_value
+
 
 class FlaskChat(flask.Flask):
     def __init__(self, *args, **kwargs):
+        self.ip = None
+        self.port = None
+        self.conn = None
+        self.value = None
+        self.id = None
+        self.status = None
+        self.nodes = []
+        self.messages = []
+        self.topology = []
         super().__init__(*args, **kwargs)
+
 
 app = FlaskChat(__name__)
 
-# logging configuration
-LEVELS = { 'debug':logging.DEBUG,
-            'info':logging.INFO,
-            'warning':logging.WARNING,
-            'error':logging.ERROR,
-            'critical':logging.CRITICAL,
-            }
-
+# LOGGING SETTINGS
+flask_logger = L.getLogger('werkzeug')
+flask_logger.disabled = True
+app.logger.disabled = True
+request_logger = L.getLogger('urllib3.connectionpool')
+request_logger.disabled = True
+LEVELS = {'debug': L.DEBUG,
+          'info': L.INFO,
+          'warning': L.WARNING,
+          'error': L.ERROR,
+          'critical': L.CRITICAL,
+          }
 if len(sys.argv) > 1:
     level_name = sys.argv[1]
-    level = LEVELS.get(level_name, logging.NOTSET)
-    logging.basicConfig(level=level)
+    level = LEVELS.get(level_name, L.NOTSET)
+    L.basicConfig(level=level)
+
 
 # ----------------------------------------------------------------------------------------------------------------------
 
 def process_regular_message(message):
-    app.my_messages.append(format_regular_message(message))
+    app.messages.append(format_regular_message(message))
+    if app.status == C.STATUS_LEADER:
+        # TODO implement BROADCAST MESSAGE
+        # TODO implement time to messages
+        pass
 
-def welcome(dstip, dstport):
-    if not app.my_friend[CONST.STATE_FRIEND]:
-        app.my_friend[CONST.STATE_FRIEND] = encode_id(dstip, dstport)
-    Connector.send_leader(app.my_ip, app.my_port, dstip, dstport, app.my_leader)
+def welcome(newip, newport):
+    if not app.nodes[C.NODE_FRONT]:
+        app.nodes[C.NODE_FRONT] = encode_id(newip, newport)
+    old_back_friend = app.nodes[C.NODE_BACK]
+    app.nodes[C.NODE_BACK] = encode_id(newip, newport)
 
-def process_leader_info(leader_info):
-    if leader_info[CONST.STATE_LEADER] == encode_id(app.my_ip, app.my_port):
-        logging.debug('Leader information distributed sucessfuly')
+    if app.nodes[C.NODE_FRONT] == app.nodes[C.NODE_BACK]:
+        app.conn.send_back_setting(newip, newport, app.id)
     else:
-        dstip, dstport = decode_id(app.my_friend[CONST.STATE_FRIEND])
-        Connector.send_leader(app.my_ip, app.my_port, dstip, dstport, leader_info)
+        old_back_ip, old_back_port = decode_id(old_back_friend)
+        app.conn.send_front_setting(old_back_ip, old_back_port, app.nodes[C.NODE_BACK])
+        app.conn.send_back_setting(newip, newport, old_back_friend)
 
-    app.my_leader[CONST.STATE_LEADER] = leader_info[CONST.STATE_LEADER]
+    app.conn.send_leader(newip, newport, app.nodes[C.NODE_LEADER])
 
 
-def process_candidate_info(candidate_info):
-    candidate_id = candidate_info[CONST.TYPE_CANDIDATE]
-    candidate_value = calc_value(candidate_id)
-    my_value = calc_value(encode_id(app.my_ip, app.my_port))
-    dstip, dstport = decode_id(app.my_friend[CONST.STATE_FRIEND])
+def connect(dstip, dstport):
+    if app.conn.connect(dstip, dstport) == 200:
+        app.nodes[C.NODE_FRONT] = encode_id(dstip, dstport)
 
-    if candidate_value > my_value:
-        Connector.send_candidate_info(app.my_ip, app.my_port, dstip, dstport, candidate_info)
-    elif my_value > candidate_value and app.my_leader:
-        start_candidacy()
-    elif my_value == candidate_value:
-        logging.debug('I AM THE LEADER!')
-        leader_info = build_node(CONST.STATE_LEADER, app.my_ip, app.my_port)
-        Connector.send_leader(app.my_ip, app.my_port, dstip, dstport, leader_info)
+
+def process_leader_message(leader_json):
+    if leader_json == app.id:
+        L.debug('Leader information distributed successfully')
+    else:
+        dstip, dstport = decode_id(app.nodes[C.NODE_FRONT])
+        app.conn.send_leader(dstip, dstport, leader_json)
+
+    app.nodes[C.NODE_LEADER] = leader_json
+
+
+def process_back_friend_json(back_friend_json):
+    app.nodes[C.NODE_BACK] = back_friend_json
+
+
+def process_front_friend_json(front_friend_json):
+    app.nodes[C.NODE_FRONT] = front_friend_json
+
+
+def process_candidate_json(candidate_json):
+    candidate_value = calc_value(candidate_json)
+
+    try:
+        dstip, dstport = decode_id(app.nodes[C.NODE_FRONT])
+
+        if candidate_value > app.value:
+            app.conn.send_candidate(dstip, dstport, candidate_json)
+
+        elif app.value > candidate_value and app.nodes[C.NODE_LEADER]:
+            start_candidacy()
+
+        elif app.value == candidate_value:
+            L.debug('**LEADER STATE**')
+            app.status = C.STATUS_LEADER
+            app.nodes[C.NODE_LEADER] = app.id
+            app.conn.send_leader(dstip, dstport, app.id)
+    except:
+        pass
 
 
 # ----------------------------------------------------------------------------------------------------------------------
 
 def innerHandler():
+    """
+    Handling messages from my adress
+    """
 
     # CONNECTION
-    if request.form['message_type'] == CONST.TYPE_IN_INIT:
-        dstip = request.form['ip']
-        dstport = request.form['port']
-        result = Connector.connect(app.my_ip, app.my_port, dstip, dstport)
-        if result == 200:
-            app.my_friend = { CONST.STATE_FRIEND: encode_id(dstip, dstport)}
+    if request.form['message_type'] == C.TYPE_IN_INIT:
+        connect(request.form['ip'], request.form['port'])
 
     # MESSAGE
-    elif request.form['message_type'] == CONST.TYPE_IN_MESSAGE:
-        Connector.send_message(app.my_ip, app.my_port, '192.168.122.9', '5009', request.form['message'], 10)
-        #TODO send message to LEADER
-        #TODO make form on HTML!
+    elif request.form['message_type'] == C.TYPE_IN_MESSAGE:
+        try:
+            dstip, dstport = decode_id(app.nodes[C.NODE_LEADER])
+            app.conn.send_message(dstip, dstport, request.form['message'], 0)
+            L.debug('Sending message: %s', str(request.form['message']))
+        except:
+            L.debug('Message has not been sent.')
 
+    # render a page
     return flask.render_template('chat.html',
-                                 messagelist=app.my_messages,
-                                 friend = app.my_friend[CONST.STATE_FRIEND])
+                                 messagelist=app.messages,
+                                 front_friend=app.nodes[C.NODE_FRONT],
+                                 back_friend=app.nodes[C.NODE_BACK],
+                                 leader=app.nodes[C.NODE_LEADER])
 
 def outterHandler():
+    """
+    Handling messages from outter world
+    """
     headers = request.headers
-    if CONST.HEADER_MESSAGE in headers:
-        message_type = headers[CONST.HEADER_MESSAGE]
+    if C.HEADER_MESSAGE in headers:
+        message_type = headers[C.HEADER_MESSAGE]
 
         # CONNECTION
-        if message_type == CONST.TYPE_CONNECT:
-            dstip = headers[CONST.HEADER_IP]
-            dstport = headers[CONST.HEADER_PORT]
+        if message_type == C.TYPE_CONNECT:
+            dstip = headers[C.HEADER_IP]
+            dstport = headers[C.HEADER_PORT]
             welcome(dstip, dstport)
 
         # LEADER
-        elif message_type == CONST.TYPE_LEADER_INFO:
-            received_leader_info = json.loads(request.json)
-            process_leader_info(received_leader_info)
+        elif message_type == C.TYPE_LEADER_INFO:
+            leader = json.loads(request.json)
+            process_leader_message(leader)
 
-        # MISSING LEADER
-        elif message_type == CONST.TYPE_MISSING_LEADER:
-            # TODO: MISSING LEADER, not sure if needed
-            logging.debug('RECEIVED MISSING LEADER INFO!')
-
-        # MESSAGE
-        elif message_type == CONST.TYPE_MESSAGE:
+        #  MESSAGE
+        elif message_type == C.TYPE_MESSAGE:
             received_message = json.loads(request.json)
-            logging.debug('Received regular message: %s', received_message[CONST.MESSAGE_TEXT])
+            L.debug('Received message: %s', received_message[C.MESSAGE_TEXT])
             process_regular_message(received_message)
 
-        elif message_type == CONST.TYPE_CANDIDATE:
-            received_candidate_info = json.loads(request.json)
-            logging.debug('Received candidate message: %s', received_candidate_info)
-            process_candidate_info(received_candidate_info)
+        # CANDIDATE
+        elif message_type == C.TYPE_CANDIDATE:
+            candidate = json.loads(request.json)
+            L.debug('Received candidate: %s', candidate)
+            process_candidate_json(candidate)
 
+        # FRONT FRIEND
+        elif message_type == C.TYPE_FRONT:
+            front_friend = json.loads(request.json)
+            L.debug('Received front friend message: %s', front_friend)
+            process_front_friend_json(front_friend)
 
+        # BACK FRIEND
+        elif message_type == C.TYPE_BACK:
+            back_friend = json.loads(request.json)
+            L.debug('Received back friend message: %s', back_friend)
+            process_back_friend_json(back_friend)
+
+        # HEART BEAT
+        elif message_type == C.TYPE_HEARTBEAT:
+            node = encode_id(headers[C.HEADER_IP], headers[C.HEADER_PORT])
+
+            if node not in app.topology:
+                app.topology.append(node)
+                L.debug('**TOPOLOGY**')
+                L.debug(app.topology)
+
+    # render a page
     return flask.render_template('chat.html',
-                                 messagelist=app.my_messages,
-                                 friend=app.my_friend[CONST.STATE_FRIEND])
+                                 messagelist=app.messages,
+                                 front_friend=app.nodes[C.NODE_FRONT],
+                                 back_friend=app.nodes[C.NODE_BACK],
+                                 leader=app.nodes[C.NODE_LEADER])
+
 
 # ----------------------------------------------------------------------------------------------------------------------
 
 def processGet():
-    if app.my_ip == request.remote_addr:
+    # if requests come from my address
+    if app.ip == request.remote_addr:
         return flask.render_template('index.html')
+    # else show error
     else:
         return flask.render_template('error.html')
 
+
 def processPost():
-    if app.my_ip == request.remote_addr:
+    # if requests come from my address, inner handler will process it
+    if app.ip == request.remote_addr:
         return innerHandler()
+    # else outter handler will process it
     else:
         return outterHandler()
 
@@ -150,43 +235,58 @@ def index():
     elif method == 'POST':
         return processPost()
 
+
 # ----------------------------------------------------------------------------------------------------------------------
 
 def start_candidacy():
-    logging.debug('Starting election. Sending me as a candidate')
-    dstip, dstport = decode_id(app.my_friend[CONST.STATE_FRIEND])
-    me_candidate = build_node(CONST.TYPE_CANDIDATE, app.my_ip, app.my_port)
-    Connector.send_candidate_info(app.my_ip, app.my_port,
-                                  dstip, dstport,
-                                  me_candidate)
-    # TODO TEST
-    app.my_leader[CONST.STATE_LEADER] = 'lol'
+    try:
+        #L.debug('Starting election. Sending me as a candidate')
+        dstip, dstport = decode_id(app.nodes[C.NODE_FRONT])
+        app.conn.send_candidate(dstip, dstport, app.id)
+    except:
+        pass
+
 
 def heartbeat():
-    logging.debug('heartbeat')
+    while True:
+        try:
+            leader_ip, leaderport = decode_id(app.nodes[C.NODE_LEADER])
+            app.conn.heartbeat(leader_ip, leaderport)
+        except:
+            pass
+        finally:
+            time.sleep(5)
+
 
 def leader_checker():
     while True:
-        if not app.my_leader and app.my_friend[CONST.STATE_FRIEND]:
+        if not app.nodes[C.NODE_LEADER] and app.nodes[C.NODE_FRONT]:
             start_candidacy()
+        time.sleep(5)
+
 
 def main_handler(ip, port):
-    app.my_ip = ip
-    app.my_port = port
-    app.my_friend = {CONST.STATE_FRIEND: None}
-    app.my_state = {CONST.STATE_LEADER : None}
-    app.my_messages = []
-    app.my_leader = {}
+    app.ip = ip
+    app.port = port
+    app.conn = Connector(ip, port)
+    app.value = calc_value(encode_id(app.ip, app.port))
+    app.id = encode_id(app.ip, app.port)
+    app.nodes = {C.NODE_FRONT: None, C.NODE_BACK: None, C.NODE_LEADER: None}
+    app.status = C.STATUS_FOLLOWER
+    app.messages = []
+    app.topology = []
     app.run(host=ip, port=port)
+
 
 @click.command()
 @click.argument('ip')
 @click.argument('port')
 def runner(ip, port):
+
     # main thread for request handlers and processing
     m = threading.Thread(name='main_handler', target=main_handler, args=(ip, port))
 
-    # daemon thread for heartbeat to friend
+    #  daemon thread for heartbeat to friend
     h = threading.Thread(name='heartbeat', target=heartbeat)
     h.setDaemon(True)
 
@@ -198,6 +298,6 @@ def runner(ip, port):
     h.start()
     s.start()
 
+
 if __name__ == '__main__':
     runner(obj={})
-
