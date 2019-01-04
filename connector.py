@@ -5,6 +5,8 @@ import CONSTANTS as CONST
 import json
 
 # LOGGING SETTINGS
+from support import encode_id, decode_id
+
 request_logger = L.getLogger('urllib3.connectionpool')
 request_logger.disabled = True
 LEVELS = {'debug': L.DEBUG,
@@ -38,10 +40,14 @@ class Connector:
     def build_node_json(self, node):
         return json.dumps(node)
 
-    def build_regular_message(self, text, time):
+    def build_regular_message(self, text, time, origin):
         message = {}
         message[CONST.MESSAGE_TEXT] = text
         message[CONST.MESSAGE_TIME] = time
+        message[CONST.MESSAGE_ORIGIN] = origin
+        return json.dumps(message)
+
+    def build_message_from_dict(self, message):
         return json.dumps(message)
 
     def connect(self, dstip, dstport):
@@ -64,7 +70,8 @@ class Connector:
     def send_message(self, dstip, dstport, text, time):
         headers = self.build_header(CONST.TYPE_MESSAGE, self.ip, self.port)
         url = self.build_url(dstip, dstport)
-        message_data = self.build_regular_message(text, time)
+        origin = encode_id(self.ip, self.port)
+        message_data = self.build_regular_message(text, time, origin)
         result = requests.post(url, headers=headers, json=message_data)
 
     def send_candidate(self, dstip, dstport, info):
@@ -85,8 +92,46 @@ class Connector:
         back_json = self.build_node_json(info)
         result = requests.post(url, headers=headers, json=back_json)
 
+    def send_front_front_setting(self, dstip, dstport, info):
+        headers = self.build_header(CONST.TYPE_FRONT_FRONT, self.ip, self.port)
+        url = self.build_url(dstip, dstport)
+        back_json = self.build_node_json(info)
+        result = requests.post(url, headers=headers, json=back_json)
+
     def heartbeat(self, dstip, dstport):
         headers = self.build_header(CONST.TYPE_HEARTBEAT, self.ip, self.port)
         url = self.build_url(dstip, dstport)
         result = requests.post(url, headers=headers)
+        return result.status_code
 
+    def friendbeat(self, dstip, dstport):
+        headers = self.build_header(CONST.TYPE_FRIENDBEAT, self.ip, self.port)
+        url = self.build_url(dstip, dstport)
+        result = requests.post(url, headers=headers)
+        if str(result.status_code) == CONST.CODE_OK:
+            # print("ANSWER OK")
+            # print("CODE: {}", format(result.status_code))
+            # print("Answer: {}" .format(result.json()))
+            return result.json()
+        else:
+            # print("ANSWER BAD")
+            # print("CODE: {}", format(result.status_code))
+            # print("Answer: {}" .format(result.json()))
+            return None
+
+    def death_report(self, dstip, dstport, dead_node):
+        headers = self.build_header(CONST.TYPE_DEATH_REPORT, self.ip, self.port)
+        url = self.build_url(dstip, dstport)
+        dead_node_data = self.build_node_json(dead_node)
+        result = requests.post(url, headers=headers, json=dead_node_data)
+
+    def broadcast(self, message, topology):
+        headers = self.build_header(CONST.TYPE_MESSAGE, self.ip, self.port)
+        message_data = self.build_message_from_dict(message)
+        for node in topology:
+            try:
+                dstip, dstport = decode_id(node)
+                url = self.build_url(dstip, dstport)
+                result = requests.post(url, headers=headers, json=message_data)
+            except:
+                pass

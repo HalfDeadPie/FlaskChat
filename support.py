@@ -17,7 +17,9 @@ def decode_id(id):
     return ip, port
 
 def format_regular_message(message):
-    return '[' + str(message[CONST.MESSAGE_TIME]) + ']: ' + str(message[CONST.MESSAGE_TEXT])
+    return '[' + str(message[CONST.MESSAGE_TIME]) + ']' \
+           '[' + str(message[CONST.MESSAGE_ORIGIN]) + ']: ' \
+           + str(message[CONST.MESSAGE_TEXT])
 
 def build_node_dict(name, ip, port):
     return {name: encode_id(ip, port)}
