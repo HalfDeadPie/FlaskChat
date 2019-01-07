@@ -109,20 +109,26 @@ class Connector:
         url = self.build_url(dstip, dstport)
         result = requests.post(url, headers=headers)
         if str(result.status_code) == CONST.CODE_OK:
-            # print("ANSWER OK")
-            # print("CODE: {}", format(result.status_code))
-            # print("Answer: {}" .format(result.json()))
             return result.json()
         else:
-            # print("ANSWER BAD")
-            # print("CODE: {}", format(result.status_code))
-            # print("Answer: {}" .format(result.json()))
             return None
 
     def death_report(self, dstip, dstport, dead_node):
-        headers = self.build_header(CONST.TYPE_DEATH_REPORT, self.ip, self.port)
+        headers = self.build_header(CONST.TYPE_DEATH, self.ip, self.port)
         url = self.build_url(dstip, dstport)
         dead_node_data = self.build_node_json(dead_node)
+        result = requests.post(url, headers=headers, json=dead_node_data)
+
+    def logout_report(self, dstip, dstport, loggedout_node):
+        headers = self.build_header(CONST.TYPE_LOGOUT, self.ip, self.port)
+        url = self.build_url(dstip, dstport)
+        dead_node_data = self.build_node_json(loggedout_node)
+        result = requests.post(url, headers=headers, json=dead_node_data)
+
+    def new_node_report(self, dstip, dstport, new_node):
+        headers = self.build_header(CONST.TYPE_NEW, self.ip, self.port)
+        url = self.build_url(dstip, dstport)
+        dead_node_data = self.build_node_json(new_node)
         result = requests.post(url, headers=headers, json=dead_node_data)
 
     def broadcast(self, message, topology):
@@ -133,5 +139,38 @@ class Connector:
                 dstip, dstport = decode_id(node)
                 url = self.build_url(dstip, dstport)
                 result = requests.post(url, headers=headers, json=message_data)
+            except:
+                pass
+
+    def broadcast_loggedout_node(self, loggedout_node, topology):
+        headers = self.build_header(CONST.TYPE_INFO_LOGOUT, self.ip, self.port)
+        loggedout_data = self.build_node_json(loggedout_node)
+        for node in topology:
+            try:
+                dstip, dstport = decode_id(node)
+                url = self.build_url(dstip, dstport)
+                result = requests.post(url, headers=headers, json=loggedout_data)
+            except:
+                pass
+
+    def broadcast_new_node(self, new_node, topology):
+        headers = self.build_header(CONST.TYPE_INFO_NEW, self.ip, self.port)
+        new_data = self.build_node_json(new_node)
+        for node in topology:
+            try:
+                dstip, dstport = decode_id(node)
+                url = self.build_url(dstip, dstport)
+                result = requests.post(url, headers=headers, json=new_data)
+            except:
+                pass
+
+    def broadcast_dead_node(self, dead_node, topology):
+        headers = self.build_header(CONST.TYPE_INFO_DEATH, self.ip, self.port)
+        dead_data = self.build_node_json(dead_node)
+        for node in topology:
+            try:
+                dstip, dstport = decode_id(node)
+                url = self.build_url(dstip, dstport)
+                result = requests.post(url, headers=headers, json=dead_data)
             except:
                 pass
