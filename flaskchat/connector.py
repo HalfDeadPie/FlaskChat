@@ -1,9 +1,9 @@
 import requests
-import CONSTANTS as CONST
+from flaskchat import CONSTANTS as CONST
 import json
 
 # LOGGING SETTINGS
-from support import encode_id, decode_id
+from flaskchat.support import encode_id, decode_id
 
 class Connector:
 
@@ -39,7 +39,7 @@ class Connector:
         headers = self.build_header(CONST.TYPE_CONNECT, self.ip, self.port)
         url = self.build_url(dstip, dstport)
         result = requests.post(url, headers=headers, data='hello')
-        return result.status_code
+        return result
 
     def send_leader(self, dstip, dstport, leader):
         if leader:
@@ -70,18 +70,21 @@ class Connector:
         url = self.build_url(dstip, dstport)
         back_json = self.build_node_json(info)
         result = requests.post(url, headers=headers, json=back_json)
+        return result.status_code
 
     def send_front_setting(self, dstip, dstport, info):
         headers = self.build_header(CONST.TYPE_FRONT, self.ip, self.port)
         url = self.build_url(dstip, dstport)
         back_json = self.build_node_json(info)
         result = requests.post(url, headers=headers, json=back_json)
+        return result.status_code
 
     def send_front_front_setting(self, dstip, dstport, info):
         headers = self.build_header(CONST.TYPE_FRONT_FRONT, self.ip, self.port)
         url = self.build_url(dstip, dstport)
         back_json = self.build_node_json(info)
         result = requests.post(url, headers=headers, json=back_json)
+        return result.status_code
 
     def heartbeat(self, dstip, dstport):
         headers = self.build_header(CONST.TYPE_HEARTBEAT, self.ip, self.port)

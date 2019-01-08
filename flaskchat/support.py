@@ -1,6 +1,6 @@
 import datetime
 
-import CONSTANTS as CONST
+from flaskchat import CONSTANTS as CONST
 import string
 
 
@@ -39,7 +39,7 @@ def calc_value(id):
 
 
 def current_time():
-    return str(datetime.datetime.now())
+    return str(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3])
 
 
 def debug_stamp():

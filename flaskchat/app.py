@@ -3,18 +3,19 @@ import json
 import os
 import time
 
-import CONSTANTS as C
 import threading
 import logging
 import flask
 
+from flaskchat import CONSTANTS as C
 from click._compat import raw_input
 from asyncio import sleep
 from click._unicodefun import click
-from flask import Flask, request
-from connector import Connector
-from support import encode_id, decode_id, \
+from flask import request
+from flaskchat.connector import Connector
+from flaskchat.support import encode_id, decode_id, \
     format_regular_message, calc_value, debug_stamp, info_stamp
+from pathlib import Path
 
 
 class FlaskChat(flask.Flask):
@@ -43,13 +44,14 @@ request_logger.disabled = True
 app_logger = logging.getLogger('flaskchat')
 app_logger.setLevel(logging.DEBUG)
 
-fh = logging.FileHandler('history.log')
+home = str(Path.home())
+fh = logging.FileHandler(home + '/flaskchat.log')
 fh.setLevel(logging.DEBUG)
 
 ch = logging.StreamHandler()
 ch.setLevel(logging.INFO)
 
-my_formatter = logging.Formatter('%(levelname)s - %(message)s')
+my_formatter = logging.Formatter('[%(levelname)s] %(message)s')
 
 fh.setFormatter(my_formatter)
 ch.setFormatter(my_formatter)
@@ -60,37 +62,75 @@ app_logger.addHandler(ch)
 
 # support----------------------------------------------------------------------------------------------------------------------
 
-def welcome(newip, newport):
-    if not app.nodes[C.NODE_FRONT]:
-        app.nodes[C.NODE_FRONT] = encode_id(newip, newport)
-    old_back_friend = app.nodes[C.NODE_BACK]
-    app.nodes[C.NODE_BACK] = encode_id(newip, newport)
+def report_new_node(new_node):
+    try:
+        if app.status == C.STATUS_LEADER:
+            app_logger.info(info_stamp() + "%s joined", new_node)
+            app.conn.broadcast_new_node(new_node, app.topology)
+        else:
+            leaderip, leaderport = decode_id(app.nodes[C.NODE_LEADER])
+            app.conn.new_node_report(leaderip, leaderport, new_node)
+    except:
+        pass
 
+
+def process_new_connection(request):
+    headers = request.headers
+    newip = headers[C.HEADER_IP]
+    newport = headers[C.HEADER_PORT]
+    new_node = encode_id(newip, newport)
+    app_logger.debug(debug_stamp() + "Welcoming %s", new_node)
+
+    if not app.nodes[C.NODE_FRONT]:
+        app.nodes[C.NODE_FRONT] = new_node
+
+    old_back_friend = app.nodes[C.NODE_BACK]
+    app.nodes[C.NODE_BACK] = new_node
+
+    welcome_dict = {C.NODE_LEADER: app.nodes[C.NODE_LEADER]}
     if app.nodes[C.NODE_FRONT] == app.nodes[C.NODE_BACK]:
-        try:
-            app.conn.send_back_setting(newip, newport, app.id)
-        except:
-            pass
+        welcome_dict[C.NODE_BACK] = app.id
     else:
-        try:
-            old_back_ip, old_back_port = decode_id(old_back_friend)
-            app.conn.send_front_setting(old_back_ip, old_back_port, app.nodes[C.NODE_BACK])
-            app.conn.send_back_setting(newip, newport, old_back_friend)
-            app.conn.send_leader(newip, newport, app.nodes[C.NODE_LEADER])
-            new_node = encode_id(newip, newport)
-            if app.status == C.STATUS_LEADER:
-                app_logger.info(info_stamp() + "%s joined", new_node)
-                app.conn.broadcast_new_node(new_node, app.topology)
-            else:
-                leaderip, leaderport = decode_id(app.nodes[C.NODE_LEADER])
-                app.conn.new_node_report(leaderip, leaderport, new_node)
-        except:
-            pass
+        welcome_dict[C.NODE_BACK] = old_back_friend
+
+    try:
+        old_back_ip, old_back_port = decode_id(old_back_friend)
+        app.conn.send_front_setting(old_back_ip, old_back_port, app.nodes[C.NODE_BACK])
+    except:
+        pass
+
+    try:
+        report_new_node(new_node)
+    except:
+        pass
+
+    return json.dumps(welcome_dict), C.CODE_OK
+
+
+def process_welcome_json(json):
+    try:
+        app.nodes[C.NODE_BACK] = json[C.NODE_BACK]
+    except:
+        pass
+
+    try:
+        app.nodes[C.NODE_FRONT] = json[C.NODE_FRONT]
+    except:
+        pass
+
+    try:
+        app.nodes[C.NODE_LEADER] = json[C.NODE_LEADER]
+        if app.nodes[C.NODE_LEADER]:
+            app_logger.info(info_stamp() + 'New leader: %s', app.nodes[C.NODE_LEADER])
+    except:
+        pass
 
 
 def connect(dstip, dstport):
-    if app.conn.connect(dstip, dstport) == 200:
+    result = app.conn.connect(dstip, dstport)
+    if str(result.status_code) == C.CODE_OK:
         app.nodes[C.NODE_FRONT] = encode_id(dstip, dstport)
+        process_welcome_json(result.json())
 
 
 def start_candidacy():
@@ -127,17 +167,9 @@ def report_logout(loggedout_node):
     except:
         app_logger.debug(debug_stamp() + 'Logging off without reporting')
 
-
-def friendhit():
-    frontip, frontport = decode_id(app.nodes[C.NODE_FRONT])
-    try:
-        # connector returns answer with backup front
-        backup_front = app.conn.friendbeat(frontip, frontport)
-        if backup_front == app.id:
-            app.nodes[C.NODE_BACKUP_FRONT] = None
-        else:
-            app.nodes[C.NODE_BACKUP_FRONT] = backup_front
-    except:
+def friendhit_repeating(front_node):
+    app.repeater += 1
+    if app.repeater >= 3:
         app_logger.debug(debug_stamp() + "Lost direct connection to %s", app.nodes[C.NODE_FRONT])
         app.nodes[C.NODE_FRONT] = app.nodes[C.NODE_BACKUP_FRONT]
         if app.nodes[C.NODE_FRONT]:
@@ -146,9 +178,26 @@ def friendhit():
                 app.conn.send_back_setting(newfrontip, newfrontport, app.id)
             except:
                 pass
-        if app.nodes[C.NODE_BACK] == encode_id(frontip, frontport):
+        if app.nodes[C.NODE_BACK] == front_node:
             app.nodes[C.NODE_BACK] = None
-        report_dead_node(encode_id(frontip, frontport))
+        app.repeater = 0
+        report_dead_node(front_node)
+    else:
+        app_logger.debug(debug_stamp() + 'Trying to establish connection... (%s)', str(app.repeater))
+        time.sleep(1)
+        friendhit()
+
+def friendhit():
+    frontip, frontport = decode_id(app.nodes[C.NODE_FRONT])
+    try:
+        backup_front = app.conn.friendbeat(frontip, frontport)
+        app.repeater = 0
+        if backup_front == app.id:
+            app.nodes[C.NODE_BACKUP_FRONT] = None
+        else:
+            app.nodes[C.NODE_BACKUP_FRONT] = backup_front
+    except Exception as e:
+        friendhit_repeating(app.nodes[C.NODE_FRONT])
 
 
 def logout():
@@ -253,11 +302,6 @@ def process_candidate_json(candidate_json):
             pass
 
 
-def process_friendbeat():
-    front_friend_json = json.dumps(app.nodes[C.NODE_FRONT])
-    return front_friend_json, C.CODE_OK
-
-
 def process_logout(loggedout_node):  # leader
     # TODO report death to all nodes
     app_logger.info(info_stamp() + "%s logged out", loggedout_node)
@@ -295,15 +339,8 @@ def outterHandler():
     if C.HEADER_MESSAGE in headers:
         message_type = headers[C.HEADER_MESSAGE]
 
-        # CONNECTION
-        if message_type == C.TYPE_CONNECT:
-            dstip = headers[C.HEADER_IP]
-            dstport = headers[C.HEADER_PORT]
-            app_logger.debug(debug_stamp() + "Welcoming %s", encode_id(dstip, dstport))
-            welcome(dstip, dstport)
-
-            # LEADER
-        elif message_type == C.TYPE_LEADER_INFO:
+        # LEADER
+        if message_type == C.TYPE_LEADER_INFO:
             leader = json.loads(request.json)
             app_logger.debug(debug_stamp() + "Received leader %s", leader)
             process_leader_message(leader)
@@ -378,12 +415,12 @@ def processGet():
 
 def processPost():
     if request.headers[C.HEADER_MESSAGE] == C.TYPE_FRIENDBEAT:
-        return process_friendbeat()
-    elif app.ip != request.remote_addr:
+        return json.dumps(app.nodes[C.NODE_FRONT]), C.CODE_OK
+    elif request.headers[C.HEADER_MESSAGE] == C.TYPE_CONNECT:
+        return process_new_connection(request)
+    else:
         outterHandler()
         return C.CODE_OK
-    else:
-        return 'CLI only!'
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -474,6 +511,7 @@ def main_handler(ip, port):
                  C.NODE_BACKUP_FRONT: None}
     app.status = C.STATUS_FOLLOWER
     app.topology = []
+    app.repeater = 0
     app.run(host=ip, port=port)
 
 
@@ -492,31 +530,31 @@ def runner(ipport, friend, debug):
     m = threading.Thread(name='main_handler', target=main_handler, args=(ip, port))
     m.setDaemon(True)
 
-    #  daemon thread for heartbeat to leader
-    h = threading.Thread(name='heartbeat', target=heartbeat)
-    h.setDaemon(True)
+    # daemon thread for leader checking
+    i = threading.Thread(name='raw_input', target=input)
+    i.setDaemon(True)
+
+    # daemon thread for connection checking
+    c = threading.Thread(name='connection', target=connection, args=(friend_ip, friend_port))
+    c.setDaemon(True)
 
     # daemon thread for leader checking
     s = threading.Thread(name='leader_checker', target=leader_checker)
     s.setDaemon(True)
 
-    # daemon thread for leader checking
-    i = threading.Thread(name='raw_input', target=input)
-    i.setDaemon(True)
+    #  daemon thread for heartbeat to leader
+    h = threading.Thread(name='heartbeat', target=heartbeat)
+    h.setDaemon(True)
 
-    # daemon thread for leader checking
-    c = threading.Thread(name='connection', target=connection, args=(friend_ip, friend_port))
-    c.setDaemon(True)
-
-    # daemon thread for leader checking
+    # daemon thread for front friend checking
     f = threading.Thread(name='frontbeat', target=frontbeat)
     f.setDaemon(True)
 
     m.start()
-    h.start()
-    s.start()
     i.start()
     c.start()
+    s.start()
+    h.start()
     f.start()
 
     while True:
@@ -525,6 +563,3 @@ def runner(ipport, friend, debug):
 
 if __name__ == '__main__':
     runner(obj={})
-
-# TODO LOGOUT
-# TODO TESTING
