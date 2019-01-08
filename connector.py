@@ -1,24 +1,9 @@
-import logging as L
-import sys
 import requests
 import CONSTANTS as CONST
 import json
 
 # LOGGING SETTINGS
 from support import encode_id, decode_id
-
-request_logger = L.getLogger('urllib3.connectionpool')
-request_logger.disabled = True
-LEVELS = {'debug': L.DEBUG,
-          'info': L.INFO,
-          'warning': L.WARNING,
-          'error': L.ERROR,
-          'critical': L.CRITICAL,
-          }
-if len(sys.argv) > 1:
-    level_name = sys.argv[1]
-    level = LEVELS.get(level_name, L.NOTSET)
-    L.basicConfig(level=level)
 
 class Connector:
 

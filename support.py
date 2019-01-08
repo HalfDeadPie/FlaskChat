@@ -43,8 +43,8 @@ def current_time():
 
 
 def debug_stamp():
-    return '[DEBUG][' + current_time() + '] '
+    return '[' + current_time() + '] '
 
 
 def info_stamp():
-    return '[INFO][' + current_time() + '] '
+    return '[' + current_time() + '] '

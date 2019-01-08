@@ -2,9 +2,10 @@ import datetime
 import json
 import os
 import time
+
 import CONSTANTS as C
 import threading
-import logging as L
+import logging
 import flask
 
 from click._compat import raw_input
@@ -32,27 +33,29 @@ class FlaskChat(flask.Flask):
 
 app = FlaskChat(__name__)
 
-# LOGGING SETTINGS
-flask_logger = L.getLogger('werkzeug')
+# disable Flask logger
+flask_logger = logging.getLogger('werkzeug')
 flask_logger.disabled = True
-app.logger.disabled = True
-request_logger = L.getLogger('urllib3.connectionpool')
+
+request_logger = logging.getLogger('urllib3.connectionpool')
 request_logger.disabled = True
 
-LEVELS = {'debug': L.DEBUG,
-          'info': L.INFO,
-          'warning': L.WARNING,
-          'error': L.ERROR,
-          'critical': L.CRITICAL,
-          }
+app_logger = logging.getLogger('flaskchat')
+app_logger.setLevel(logging.DEBUG)
 
-chat_logger = L.getLogger()
-chat_logger.handlers = []
-chat_handler = L.StreamHandler()
-chat_handler.setLevel(L.INFO)
-formatter = L.Formatter("%(message)s")
-chat_handler.setFormatter(formatter)
-chat_logger.addHandler(chat_handler)
+fh = logging.FileHandler('history.log')
+fh.setLevel(logging.DEBUG)
+
+ch = logging.StreamHandler()
+ch.setLevel(logging.INFO)
+
+my_formatter = logging.Formatter('%(levelname)s - %(message)s')
+
+fh.setFormatter(my_formatter)
+ch.setFormatter(my_formatter)
+
+app_logger.addHandler(fh)
+app_logger.addHandler(ch)
 
 
 # support----------------------------------------------------------------------------------------------------------------------
@@ -64,18 +67,25 @@ def welcome(newip, newport):
     app.nodes[C.NODE_BACK] = encode_id(newip, newport)
 
     if app.nodes[C.NODE_FRONT] == app.nodes[C.NODE_BACK]:
-        app.conn.send_back_setting(newip, newport, app.id)
+        try:
+            app.conn.send_back_setting(newip, newport, app.id)
+        except:
+            pass
     else:
-        old_back_ip, old_back_port = decode_id(old_back_friend)
-        app.conn.send_front_setting(old_back_ip, old_back_port, app.nodes[C.NODE_BACK])
-        app.conn.send_back_setting(newip, newport, old_back_friend)
-
-    app.conn.send_leader(newip, newport, app.nodes[C.NODE_LEADER])
-    try:
-        leaderip, leaderport = decode_id(app.nodes[C.NODE_LEADER])
-        app.conn.new_node_report(leaderip, leaderport, encode_id(newip, newport))
-    except:
-        pass
+        try:
+            old_back_ip, old_back_port = decode_id(old_back_friend)
+            app.conn.send_front_setting(old_back_ip, old_back_port, app.nodes[C.NODE_BACK])
+            app.conn.send_back_setting(newip, newport, old_back_friend)
+            app.conn.send_leader(newip, newport, app.nodes[C.NODE_LEADER])
+            new_node = encode_id(newip, newport)
+            if app.status == C.STATUS_LEADER:
+                app_logger.info(info_stamp() + "%s joined", new_node)
+                app.conn.broadcast_new_node(new_node, app.topology)
+            else:
+                leaderip, leaderport = decode_id(app.nodes[C.NODE_LEADER])
+                app.conn.new_node_report(leaderip, leaderport, new_node)
+        except:
+            pass
 
 
 def connect(dstip, dstport):
@@ -101,6 +111,8 @@ def report_dead_node(dead_node):
     try:
         leaderip, leaderport = decode_id(app.nodes[C.NODE_LEADER])
         if app.status == C.STATUS_LEADER:
+            app_logger.info(info_stamp() + "%s lost connection", dead_node)
+            app.conn.broadcast_dead_node(dead_node, app.topology)
             remove_node(dead_node)
         else:
             app.conn.death_report(leaderip, leaderport, dead_node)
@@ -113,7 +125,7 @@ def report_logout(loggedout_node):
         leaderip, leaderport = decode_id(app.nodes[C.NODE_LEADER])
         app.conn.logout_report(leaderip, leaderport, loggedout_node)
     except:
-        chat_logger.debug(debug_stamp() + 'Logging off without reporting')
+        app_logger.debug(debug_stamp() + 'Logging off without reporting')
 
 
 def friendhit():
@@ -126,7 +138,7 @@ def friendhit():
         else:
             app.nodes[C.NODE_BACKUP_FRONT] = backup_front
     except:
-        chat_logger.debug(debug_stamp() + "Lost direct connection to %s", app.nodes[C.NODE_FRONT])
+        app_logger.debug(debug_stamp() + "Lost direct connection to %s", app.nodes[C.NODE_FRONT])
         app.nodes[C.NODE_FRONT] = app.nodes[C.NODE_BACKUP_FRONT]
         if app.nodes[C.NODE_FRONT]:
             newfrontip, newfrontport = decode_id(app.nodes[C.NODE_FRONT])
@@ -148,36 +160,36 @@ def logout():
     if app.status == C.STATUS_LEADER:
         app.conn.broadcast_loggedout_node(app.id, app.topology)
 
-    chat_logger.info(info_stamp() + "Logging out...")
+    app_logger.info(info_stamp() + "Logging out...")
     report_logout(app.id)
     os._exit(0)
 
 
 def print_info():
-    chat_logger.info("My address        : %s", app.id)
+    app_logger.info("My address        : %s", app.id)
 
     try:
-        chat_logger.info("Front address     : %s", app.nodes[C.NODE_FRONT])
+        app_logger.info("Front address     : %s", app.nodes[C.NODE_FRONT])
     except:
-        chat_logger.info("Front address     : None")
+        app_logger.info("Front address     : None")
 
     try:
-        chat_logger.info("Back address      : %s", app.nodes[C.NODE_BACK])
+        app_logger.info("Back address      : %s", app.nodes[C.NODE_BACK])
     except:
-        chat_logger.info("Back address     : None")
+        app_logger.info("Back address     : None")
 
     try:
-        chat_logger.info("Leader address    : %s", app.nodes[C.NODE_LEADER])
+        app_logger.info("Leader address    : %s", app.nodes[C.NODE_LEADER])
     except:
-        chat_logger.info("Leader address    : None")
+        app_logger.info("Leader address    : None")
 
     try:
-        chat_logger.info("Bck Front address : %s", app.nodes[C.NODE_BACKUP_FRONT])
+        app_logger.info("Bck Front address : %s", app.nodes[C.NODE_BACKUP_FRONT])
     except:
-        chat_logger.info("Bck Front address : None")
+        app_logger.info("Bck Front address : None")
 
     if app.status == C.STATUS_LEADER:
-        chat_logger.info("Topology: %s", app.topology)
+        app_logger.info("Topology: %s", app.topology)
 
 
 # message processing----------------------------------------------------------------------------------------------------------------------
@@ -186,27 +198,27 @@ def process_regular_message(message):
     if app.status == C.STATUS_LEADER:
         message[C.MESSAGE_TIME] = str(datetime.datetime.now())
         app.conn.broadcast(message, app.topology)
-    chat_logger.info(format_regular_message(message))
+    app_logger.info(format_regular_message(message))
 
 
 def send_regular_message_from_leader(text):
     message = {C.MESSAGE_TEXT: text,
                C.MESSAGE_TIME: str(datetime.datetime.now()),
                C.MESSAGE_ORIGIN: app.id}
-    chat_logger.info(format_regular_message(message))
+    app_logger.info(format_regular_message(message))
     app.conn.broadcast(message, app.topology)
 
 
 def process_leader_message(leader_json):
     if leader_json == app.id:
-        chat_logger.debug(debug_stamp() + 'Leader information distributed successfully')
-        backip, backport = app.nodes[C.NODE_BACK]
+        app_logger.debug(debug_stamp() + 'Leader information distributed successfully')
+        backip, backport = decode_id(app.nodes[C.NODE_BACK])
     elif app.nodes[C.NODE_FRONT]:
         dstip, dstport = decode_id(app.nodes[C.NODE_FRONT])
         app.conn.send_leader(dstip, dstport, leader_json)
 
     app.nodes[C.NODE_LEADER] = leader_json
-    chat_logger.info(info_stamp() + 'New leader: %s', app.nodes[C.NODE_LEADER])
+    app_logger.info(info_stamp() + 'New leader: %s', app.nodes[C.NODE_LEADER])
 
 
 def process_back_friend_json(back_friend_json):
@@ -225,15 +237,15 @@ def process_candidate_json(candidate_json):
             dstip, dstport = decode_id(app.nodes[C.NODE_FRONT])
 
             if int(candidate_value) > int(app.value):
-                chat_logger.debug(debug_stamp() + 'Resending candidate: %s', candidate_json)
+                app_logger.debug(debug_stamp() + 'Resending candidate: %s', candidate_json)
                 app.conn.send_candidate(dstip, dstport, candidate_json)
 
             elif int(app.value) > int(candidate_value) and app.nodes[C.NODE_LEADER]:
-                chat_logger.debug(debug_stamp() + 'Swapping me as a candidate: %s', candidate_json)
+                app_logger.debug(debug_stamp() + 'Swapping me as a candidate: %s', candidate_json)
                 start_candidacy()
 
             elif int(app.value) == int(candidate_value):
-                chat_logger.debug(debug_stamp() + 'Setting the leader state')
+                app_logger.debug(debug_stamp() + 'Setting the leader state')
                 app.status = C.STATUS_LEADER
                 app.nodes[C.NODE_LEADER] = app.id
                 app.conn.send_leader(dstip, dstport, app.id)
@@ -243,39 +255,37 @@ def process_candidate_json(candidate_json):
 
 def process_friendbeat():
     front_friend_json = json.dumps(app.nodes[C.NODE_FRONT])
-    # TODO make all the ifs when there are only two nodes
-    # TODO make proper deleting nodes from the whole topology if is needed
     return front_friend_json, C.CODE_OK
 
 
 def process_logout(loggedout_node):  # leader
     # TODO report death to all nodes
-    chat_logger.info(info_stamp() + "%s logged out", loggedout_node)
+    app_logger.info(info_stamp() + "%s logged out", loggedout_node)
     remove_node(loggedout_node)
     app.conn.broadcast_loggedout_node(loggedout_node, app.topology)
 
 
 def process_info_loggedout(loggedout_node):  # follower
-    chat_logger.info(info_stamp() + "%s logged out", loggedout_node)
+    app_logger.info(info_stamp() + "%s logged out", loggedout_node)
 
 
 def process_new_node(new_node):  # leader
-    chat_logger.info(info_stamp() + "%s joined", new_node)
+    app_logger.info(info_stamp() + "%s joined", new_node)
     app.conn.broadcast_new_node(new_node, app.topology)
 
 
 def process_info_new(new_node):  # follower
-    chat_logger.info(info_stamp() + "%s joined", new_node)
+    app_logger.info(info_stamp() + "%s joined", new_node)
 
 
 def process_dead_node(dead_node):
-    chat_logger.info(info_stamp() + "%s lost connection", dead_node)
+    app_logger.info(info_stamp() + "%s lost connection", dead_node)
     remove_node(dead_node)
     app.conn.broadcast_dead_node(dead_node, app.topology)
 
 
 def process_info_death(dead_node):  # follower
-    chat_logger.info(info_stamp() + "%s lost connection", dead_node)
+    app_logger.info(info_stamp() + "%s lost connection", dead_node)
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -289,13 +299,13 @@ def outterHandler():
         if message_type == C.TYPE_CONNECT:
             dstip = headers[C.HEADER_IP]
             dstport = headers[C.HEADER_PORT]
-            chat_logger.debug(debug_stamp() + "Welcoming %s", encode_id(dstip, dstport))
+            app_logger.debug(debug_stamp() + "Welcoming %s", encode_id(dstip, dstport))
             welcome(dstip, dstport)
 
             # LEADER
         elif message_type == C.TYPE_LEADER_INFO:
             leader = json.loads(request.json)
-            chat_logger.debug(debug_stamp() + "Received leader %s", leader)
+            app_logger.debug(debug_stamp() + "Received leader %s", leader)
             process_leader_message(leader)
 
         #  MESSAGE
@@ -311,13 +321,13 @@ def outterHandler():
         # FRONT FRIEND
         elif message_type == C.TYPE_FRONT:
             front_friend = json.loads(request.json)
-            chat_logger.debug(debug_stamp() + 'Front-friend setting received: %s', front_friend)
+            app_logger.debug(debug_stamp() + 'Front-friend setting received: %s', front_friend)
             process_front_friend_json(front_friend)
 
         # BACK FRIEND
         elif message_type == C.TYPE_BACK:
             back_friend = json.loads(request.json)
-            chat_logger.debug(debug_stamp() + 'Back-friend setting received: %s', back_friend)
+            app_logger.debug(debug_stamp() + 'Back-friend setting received: %s', back_friend)
             process_back_friend_json(back_friend)
 
         # HEART BEAT
@@ -326,7 +336,7 @@ def outterHandler():
 
             if node not in app.topology:
                 app.topology.append(node)
-                chat_logger.debug(debug_stamp() + 'New node in the topology %s', node)
+                app_logger.debug(debug_stamp() + 'New node in the topology %s', node)
 
         # DEATH REPORT
         elif message_type == C.TYPE_DEATH:
@@ -397,8 +407,8 @@ def heartbeat():
                 app.conn.heartbeat(leader_ip, leaderport)
         except:
             if app.nodes[C.NODE_LEADER]:
-                chat_logger.info(info_stamp() +
-                                 "%s lost connection", app.nodes[C.NODE_LEADER])
+                app_logger.info(info_stamp() +
+                                "%s lost connection", app.nodes[C.NODE_LEADER])
             app.nodes[C.NODE_LEADER] = None
         finally:
             time.sleep(C.SLEEP_TIME)
@@ -414,13 +424,13 @@ def frontbeat():
 def leader_checker():
     while True:
         if not app.nodes[C.NODE_LEADER]:
-            chat_logger.debug(debug_stamp() + 'Missing leader...')
+            app_logger.debug(debug_stamp() + 'Missing leader...')
             start_candidacy()
             time.sleep(C.SLEEP_TIME)
 
 
 def connection(ip, port):
-    chat_logger.debug(debug_stamp() + 'Waiting for a friend...')
+    app_logger.debug(debug_stamp() + 'Waiting for a friend...')
     while not app.nodes[C.NODE_FRONT]:
         try:
             connect(ip, port)
@@ -433,10 +443,12 @@ def connection(ip, port):
 def input():
     while True:
         input_string = raw_input()
-        if input_string == '--info':
+        if input_string == '--i' or input_string == '--info':
             print_info()
-        elif input_string == '--logout':
+        elif input_string == '--l' or input_string == '--logout':
             logout()
+        elif input_string == '--d' or input_string == '--debug':
+            ch.setLevel(logging.DEBUG) if ch.level == logging.INFO else ch.setLevel(logging.DEBUG)
         else:
             try:
                 if app.status == C.STATUS_LEADER:
@@ -444,9 +456,9 @@ def input():
                 else:
                     dstip, dstport = decode_id(app.nodes[C.NODE_LEADER])
                     app.conn.send_message(dstip, dstport, input_string, 0)
-                chat_logger.debug(debug_stamp() + 'Sending message: %s', input_string)
+                app_logger.debug(debug_stamp() + 'Sending message: %s', input_string)
             except:
-                chat_logger.debug(debug_stamp() + 'Message has not been sent.')
+                app_logger.debug(debug_stamp() + 'Message has not been sent.')
                 pass
 
 
@@ -471,7 +483,7 @@ def main_handler(ip, port):
 @click.option('--DEBUG', '-d', is_flag=True)
 def runner(ipport, friend, debug):
     if debug:
-        chat_handler.setLevel(L.DEBUG)
+        ch.setLevel(logging.DEBUG)
 
     ip, port = decode_id(ipport)
     friend_ip, friend_port = decode_id(friend)
